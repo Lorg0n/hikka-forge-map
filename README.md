@@ -4,7 +4,7 @@ This interactive map is built using embeddings of anime titles from the website 
 
 ## Overview
 
-The map takes **384-dimensional vectors** representing anime title embeddings and projects them onto a **2D space**. This allows you to explore how similar different anime titles are based on their names. However, it's important to note that **reducing 384 dimensions to 2D** can often result in a loss of detail, so the map is not perfectly accurate in terms of absolute similarity.
+The map takes 384-dimensional vectors representing anime title embeddings and projects them onto a 2D plane. This allows you to explore how similar different anime titles are based on their embeddings. However, it's important to note that reducing 384 dimensions to 2D can often result in a loss of information, so the map is not perfectly accurate in terms of preserving the full similarity.
 
 In the future has plans to enhance the map by incorporating **genre-based similarity** in addition to title similarity, offering a more comprehensive representation of how anime are related to each other.
 
