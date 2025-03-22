@@ -83,25 +83,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         const existingPoints = document.querySelectorAll('.point');
         existingPoints.forEach(point => point.remove());
         points.forEach(point => {
-            const pointElement = document.createElement('div');
-            pointElement.className = 'point';
-
             const mapCenterX = mapWidth / 2;
             const mapCenterY = mapHeight / 2;
 
             const scaleCoordinates = 20;
-            pointElement.style.left = `${mapCenterX + point.x * scaleCoordinates}px`;
-            pointElement.style.top = `${mapCenterY + point.y * scaleCoordinates}px`;
+            const screenPointX = mapCenterX + point.x * scaleCoordinates;
+            const screenPointY = mapCenterY + point.y * scaleCoordinates;
+
+            const pointElement = document.createElement('div');
+            pointElement.className = 'point';
+
+            pointElement.style.left = `${screenPointX}px`;
+            pointElement.style.top = `${screenPointY}px`;
             pointElement.dataset.slug = point.slug;
             pointElement.dataset.x = point.x;
             pointElement.dataset.y = point.y;
 
-            pointElement.addEventListener('mouseover', (e) => {
-                
-            });
-            pointElement.addEventListener('mouseout', () => {
-                
-            });
             pointElement.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const pointRect = e.target.getBoundingClientRect();
@@ -373,8 +370,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         const viewportCenterX = (window.innerWidth / 2 - currentPos.x) / scale;
         const viewportCenterY = (window.innerHeight / 2 - currentPos.y) / scale;
 
-        const centerX = 2000;
-        const centerY = 2000;
+        const centerX = mapWidth / 2;
+        const centerY = mapHeight / 2;
         const coordX = ((viewportCenterX - centerX) / 20).toFixed(1);
         const coordY = (-((viewportCenterY - centerY) / 20)).toFixed(1);
         mapInfo.textContent = `X: ${coordX} Y: ${coordY} Scale: ${scale.toFixed(1)}`;
@@ -384,8 +381,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     window.addEventListener('resize', () => {
         currentPos = {
-            x: window.innerWidth / 2 - 2000,
-            y: window.innerHeight / 2 - 2000
+            x: window.innerWidth / 2 - mapWidth / 2,
+            y: window.innerHeight / 2 - mapHeight / 2
         };
         updateMapTransform();
         updateMapInfo();
