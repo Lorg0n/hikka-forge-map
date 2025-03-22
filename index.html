@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hikka Anime Title Map</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="map-container">
+        <div class="map" id="map">
+            <div class="grid-lines"></div>
+            <div class="axis-x"></div>
+            <div class="axis-y"></div>
+            <!-- Points will be added here by JavaScript -->
+        </div>
+        <div class="loading" id="loading"></div>
+        <div class="point-loading" id="point-loading"></div>
+    </div>
+
+    <div class="tooltip" id="tooltip">
+        <div class="tooltip-content" id="tooltip-content">
+            <!-- Anime info will be added here by JavaScript -->
+        </div>
+    </div>
+
+    <div class="controls">
+        <button class="control-btn" id="zoom-in">+</button>
+        <button class="control-btn" id="zoom-out">-</button>
+        <button class="control-btn" id="reset">⟲</button>
+    </div>
+
+    <div class="map-info" id="map-info">
+        X: 0 Y: 0 Scale: 1.0
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
