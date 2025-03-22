@@ -190,18 +190,25 @@ document.addEventListener('DOMContentLoaded', async () => {
             const tooltipRect = tooltip.getBoundingClientRect();
             const windowWidth = window.innerWidth;
             const windowHeight = window.innerHeight;
-
+    
+            let transformX = '-50%';
+            let transformY = '-100%';
+    
             if (tooltipRect.right > windowWidth) {
-                tooltip.style.left = `${x - (tooltipRect.right - windowWidth) - 10}px`;
+                const newLeft = windowWidth - tooltipRect.width - 10;
+                tooltip.style.left = `${newLeft}px`;
+                transformX = '0';
+            } 
+            else if (tooltipRect.left < 0) {
+                tooltip.style.left = '10px';
+                transformX = '0';
             }
-            if (tooltipRect.left < 0) {
-                tooltip.style.left = `${x - tooltipRect.left + 10}px`;
-            }
-
-            if (tooltipRect.top < 0) {
+            const updatedTooltipRect = tooltip.getBoundingClientRect();
+            if (updatedTooltipRect.top < 0) {
                 tooltip.style.top = `${y + 20}px`;
-                tooltip.style.transform = 'translate(-50%, 0)';
+                transformY = '0';
             }
+            tooltip.style.transform = `translate(${transformX}, ${transformY})`;
         }, 0);
     }
 
