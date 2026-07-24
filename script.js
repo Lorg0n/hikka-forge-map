@@ -441,4 +441,212 @@ document.addEventListener('DOMContentLoaded', async () => {
         requestUpdateTransform();
         hideTooltip();
     });
+
+    // --- Search ---
+    const searchInput = document.getElementById('search-input');
+    const searchResults = document.getElementById('search-results');
+    let slugSet = new Set();
+    let slugToCoords = {};
+    let searchTimeout = null;
+    let searchAbort = null;
+    let selectedSearchIndex = -1;
+
+    // Build lookup after data loads
+    function buildSearchIndex() {
+        slugSet = new Set(allPoints.map(p => p.slug));
+        slugToCoords = {};
+        for (const p of allPoints) {
+            slugToCoords[p.slug] = p;
+        }
+    }
+
+    // Rebuild index after the data loads
+    const _dataLoadedCheck = setInterval(() => {
+        if (allPoints.length > 0) {
+            buildSearchIndex();
+            clearInterval(_dataLoadedCheck);
+        }
+    }, 200);
+
+    searchInput.addEventListener('input', () => {
+        const query = searchInput.value.trim();
+        clearTimeout(searchTimeout);
+        if (query.length < 2) {
+            searchResults.classList.remove('visible');
+            searchResults.innerHTML = '';
+            selectedSearchIndex = -1;
+            return;
+        }
+        searchTimeout = setTimeout(() => doSearch(query), 300);
+    });
+
+    searchInput.addEventListener('keydown', (e) => {
+        const items = searchResults.querySelectorAll('.search-result-item');
+        if (!items.length) return;
+
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            selectedSearchIndex = Math.min(selectedSearchIndex + 1, items.length - 1);
+            updateSearchSelection(items);
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            selectedSearchIndex = Math.max(selectedSearchIndex - 1, 0);
+            updateSearchSelection(items);
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            if (selectedSearchIndex >= 0 && selectedSearchIndex < items.length) {
+                items[selectedSearchIndex].click();
+            }
+        } else if (e.key === 'Escape') {
+            searchInput.blur();
+            searchResults.classList.remove('visible');
+        }
+    });
+
+    function updateSearchSelection(items) {
+        items.forEach((item, i) => {
+            item.classList.toggle('selected', i === selectedSearchIndex);
+        });
+        if (selectedSearchIndex >= 0 && items[selectedSearchIndex]) {
+            items[selectedSearchIndex].scrollIntoView({ block: 'nearest' });
+        }
+    }
+
+    async function doSearch(query) {
+        if (searchAbort) searchAbort.abort();
+        searchAbort = new AbortController();
+
+        searchResults.innerHTML = '';
+        searchResults.classList.add('visible');
+        selectedSearchIndex = -1;
+
+        const loadingDiv = document.createElement('div');
+        loadingDiv.className = 'search-empty';
+        loadingDiv.textContent = 'Searching...';
+        searchResults.appendChild(loadingDiv);
+
+        try {
+            const url = `https://corsproxy.io/?url=${encodeURIComponent('https://api.hikka.io/anime?page=1&size=15')}`;
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'accept': 'application/json',
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    query: query,
+                    sort: ['score:desc', 'scored_by:desc', 'native_score:desc', 'native_scored_by:desc']
+                }),
+                signal: searchAbort.signal
+            });
+
+            if (!response.ok) throw new Error(`API ${response.status}`);
+            const data = await response.json();
+            renderSearchResults(data.list || [], query);
+        } catch (err) {
+            if (err.name === 'AbortError') return;
+            console.error('Search error:', err);
+            searchResults.innerHTML = '<div class="search-empty">Search failed. Try again.</div>';
+        }
+    }
+
+    function renderSearchResults(list, query) {
+        searchResults.innerHTML = '';
+
+        // Sort: on-map first, then by score desc
+        const enriched = list.map(item => ({
+            ...item,
+            onMap: slugSet.has(item.slug)
+        }));
+        enriched.sort((a, b) => {
+            if (a.onMap !== b.onMap) return a.onMap ? -1 : 1;
+            return (b.score || 0) - (a.score || 0);
+        });
+
+        if (enriched.length === 0) {
+            searchResults.innerHTML = '<div class="search-empty">No results found</div>';
+            return;
+        }
+
+        const fragment = document.createDocumentFragment();
+        for (const item of enriched) {
+            const el = document.createElement('div');
+            el.className = `search-result-item${item.onMap ? '' : ' not-on-map'}`;
+            el.dataset.slug = item.slug;
+            el.dataset.onMap = item.onMap ? '1' : '0';
+
+            const title = item.title_ua || item.title_en || item.title_ja || 'Unknown';
+            const subtitle = [item.title_en, item.title_ja].filter(t => t && t !== title).join(' / ');
+            const mediaType = formatMediaType(item.media_type);
+            const score = item.score ? `⭐ ${item.score}` : '';
+            const eps = item.episodes_total ? `${item.episodes_released}/${item.episodes_total} ep` : '';
+
+            el.innerHTML = `
+                <img class="search-result-img" src="${item.image || ''}" alt="" onerror="this.style.display='none'">
+                <div class="search-result-info">
+                    <div class="search-result-title">${escapeHtml(title)}</div>
+                    <div class="search-result-meta">${[subtitle, mediaType, score, eps].filter(Boolean).join(' · ')}</div>
+                </div>
+                <span class="search-result-badge ${item.onMap ? 'on-map' : 'off-map'}">${item.onMap ? 'On map' : 'Off map'}</span>
+            `;
+
+            el.addEventListener('click', () => handleSearchResultClick(item));
+            fragment.appendChild(el);
+        }
+        searchResults.appendChild(fragment);
+        searchResults.classList.add('visible');
+    }
+
+    function handleSearchResultClick(item) {
+        if (item.onMap && slugToCoords[item.slug]) {
+            const p = slugToCoords[item.slug];
+            const targetScale = 2;
+            const screenX = mapCenterX + p.x * scaleCoordinates;
+            const screenY = mapCenterY + p.y * scaleCoordinates;
+
+            scale = targetScale;
+            currentPos.x = window.innerWidth / 2 - screenX * scale;
+            currentPos.y = window.innerHeight / 2 - screenY * scale;
+
+            updateMapInfo();
+            requestUpdateTransform();
+
+            // Show tooltip for the found point
+            setTimeout(() => {
+                const el = visiblePoints.get(p.slug);
+                if (el) {
+                    const rect = el.getBoundingClientRect();
+                    selectedPointSlug = p.slug;
+                    fetchAnimeInfo(p.slug, rect.left + rect.width / 2, rect.top - 15);
+                }
+            }, 100);
+        } else {
+            window.open(`https://hikka.io/anime/${item.slug}`, '_blank');
+        }
+
+        searchResults.classList.remove('visible');
+        searchInput.value = '';
+        searchInput.blur();
+    }
+
+    function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+
+    // Close search on click outside
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('.search-container')) {
+            searchResults.classList.remove('visible');
+        }
+    });
+
+    // Re-focus search on "/" key
+    document.addEventListener('keydown', (e) => {
+        if (e.key === '/' && document.activeElement !== searchInput && !e.target.closest('.search-container')) {
+            e.preventDefault();
+            searchInput.focus();
+        }
+    });
 });
