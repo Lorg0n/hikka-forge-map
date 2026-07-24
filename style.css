@@ -443,3 +443,209 @@ body {
 @keyframes spin {
     to { transform: translate(-50%, -50%) rotate(360deg); }
 }
+
+/* =========================================================
+   Cluster badge on tooltip
+   ========================================================= */
+
+.tooltip-cluster-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    margin-top: 4px;
+    background-color: color-mix(in srgb, var(--badge-color) 15%, transparent);
+    border: 1px solid color-mix(in srgb, var(--badge-color) 40%, transparent);
+    color: var(--badge-color);
+    width: fit-content;
+}
+
+.tooltip-cluster-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background-color: var(--badge-color);
+    flex-shrink: 0;
+}
+
+/* =========================================================
+   Cluster filter panel
+   ========================================================= */
+
+.cluster-filter-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 200;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+}
+
+.cluster-toggle svg {
+    pointer-events: none;
+}
+
+.cluster-panel {
+    width: 280px;
+    max-height: 420px;
+    background-color: #0E0E0E;
+    border: 2px solid #19191A;
+    border-radius: 10px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 5px 20px rgba(0, 0, 0, 0.6);
+    animation: cluster-panel-in 0.18s ease-out;
+}
+
+@keyframes cluster-panel-in {
+    from { opacity: 0; transform: translateY(-8px) scale(0.97); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.cluster-panel-header {
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border-bottom: 1px solid #19191A;
+}
+
+.cluster-search {
+    width: 100%;
+    padding: 7px 10px;
+    background-color: #161616;
+    border: 1px solid #252525;
+    border-radius: 6px;
+    color: white;
+    font-size: 12px;
+    font-family: 'Inter', Arial, sans-serif;
+    outline: none;
+    box-sizing: border-box;
+    transition: border-color 0.2s;
+}
+
+.cluster-search::placeholder {
+    color: rgba(255, 255, 255, 0.35);
+}
+
+.cluster-search:focus {
+    border-color: #b31bc7;
+}
+
+.cluster-panel-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.cluster-action-btn {
+    flex: 1;
+    padding: 5px 0;
+    background-color: #161616;
+    border: 1px solid #252525;
+    border-radius: 5px;
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 11px;
+    font-weight: 600;
+    font-family: 'Inter', Arial, sans-serif;
+    cursor: pointer;
+    transition: background-color 0.15s, color 0.15s;
+}
+
+.cluster-action-btn:hover {
+    background-color: #222;
+    color: white;
+}
+
+.cluster-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 4px;
+    padding: 10px;
+    overflow-y: auto;
+    flex: 1;
+    max-height: 300px;
+}
+
+.cluster-grid::-webkit-scrollbar {
+    width: 5px;
+}
+
+.cluster-grid::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.cluster-grid::-webkit-scrollbar-thumb {
+    background-color: rgba(255, 255, 255, 0.12);
+    border-radius: 3px;
+}
+
+.cluster-chip {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    padding: 4px 2px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.12s, opacity 0.12s;
+    background-color: rgba(255, 255, 255, 0.04);
+    border: 1px solid transparent;
+    user-select: none;
+}
+
+.cluster-chip:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.cluster-chip:not(.selected) {
+    opacity: 0.35;
+}
+
+.cluster-chip.selected {
+    border-color: color-mix(in srgb, var(--chip-color) 50%, transparent);
+    background-color: color-mix(in srgb, var(--chip-color) 10%, transparent);
+}
+
+.cluster-chip-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.cluster-chip-label {
+    font-size: 9px;
+    color: rgba(255, 255, 255, 0.7);
+    font-weight: 500;
+    font-family: 'Inter', Arial, sans-serif;
+}
+
+.cluster-panel-footer {
+    padding: 8px 10px;
+    border-top: 1px solid #19191A;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.5);
+    text-align: center;
+}
+
+/* =========================================================
+   Point dimmed state (cluster filter)
+   ========================================================= */
+
+.point.cluster-dimmed {
+    opacity: 0.12 !important;
+    pointer-events: none;
+    box-shadow: none !important;
+}
+
+.point.cluster-dimmed:hover {
+    opacity: 0.12 !important;
+    background-color: var(--cluster-color, #E779C1) !important;
+    box-shadow: none !important;
+}

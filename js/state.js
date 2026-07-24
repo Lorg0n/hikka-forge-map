@@ -1,0 +1,81 @@
+export const state = {
+    // DOM
+    map: null,
+    canvasContainer: null,
+    loading: null,
+    pointLoading: null,
+    tooltip: null,
+    tooltipContent: null,
+    zoomInBtn: null,
+    zoomOutBtn: null,
+    resetBtn: null,
+    mapInfo: null,
+    modeToggle: null,
+    modeLabel: null,
+
+    // Map constants
+    mapWidth: 6000,
+    mapHeight: 6000,
+    mapCenterX: 3000,
+    mapCenterY: 3000,
+    scaleCoordinates: 20,
+    viewportBuffer: 500,
+
+    // 2D state
+    isDragging: false,
+    startPos: { x: 0, y: 0 },
+    currentPos: { x: 0, y: 0 },
+    scale: 1,
+    maxScale: 5,
+    minScale: 0.1,
+    activePointSlug: null,
+    selectedPointSlug: null,
+    selectedPointEl: null,
+    tooltipVisible: false,
+    tooltipTimer: null,
+    animeCache: {},
+    allPoints: [],
+    visiblePoints: new Map(),
+    clusterColors: {},
+    transformPending: false,
+
+    // 3D state
+    is3DMode: false,
+    threeScene: null,
+    threeCamera: null,
+    threeRenderer: null,
+    threeControls: null,
+    threePoints: null,
+    threeRaycaster: null,
+    threeMouse: null,
+    threeSlugIndex: [],
+    threeSlugToPoint: {},
+    threeAnimating: false,
+    threeSelectedPoint: null,
+    threeSelectedSlug: null,
+    threeIsOrbiting: false,
+    threeOrbitStartX: 0,
+    threeOrbitStartY: 0,
+    threeLastPointerX: 0,
+    threeLastPointerY: 0,
+    threeBaseColors: [],
+    THREE_SCALE: 3,
+
+    // Cluster filter
+    selectedClusters: new Set(),
+    allClustersSelected: true,
+    clusterGrid: null,
+    clusterCount: null,
+    clusterSearchInput: null,
+    clusterPanel: null,
+
+    // Search
+    slugSet: new Set(),
+    slugToCoords: {},
+    searchTimeout: null,
+    searchAbort: null,
+    selectedSearchIndex: -1,
+
+    // Lookups
+    slugToCluster: new Map(),
+};

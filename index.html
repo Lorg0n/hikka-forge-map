@@ -46,10 +46,39 @@
         <button class="control-btn" id="reset">⟲</button>
     </div>
 
+    <div class="cluster-filter-container" id="cluster-filter-container">
+        <button class="control-btn cluster-toggle" id="cluster-toggle" title="Filter by cluster">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="1" y="1" width="4" height="4" rx="1" fill="currentColor" opacity="0.9"/>
+                <rect x="6" y="1" width="4" height="4" rx="1" fill="currentColor" opacity="0.6"/>
+                <rect x="11" y="1" width="4" height="4" rx="1" fill="currentColor" opacity="0.3"/>
+                <rect x="1" y="6" width="4" height="4" rx="1" fill="currentColor" opacity="0.5"/>
+                <rect x="6" y="6" width="4" height="4" rx="1" fill="currentColor" opacity="0.9"/>
+                <rect x="11" y="6" width="4" height="4" rx="1" fill="currentColor" opacity="0.4"/>
+                <rect x="1" y="11" width="4" height="4" rx="1" fill="currentColor" opacity="0.3"/>
+                <rect x="6" y="11" width="4" height="4" rx="1" fill="currentColor" opacity="0.7"/>
+                <rect x="11" y="11" width="4" height="4" rx="1" fill="currentColor" opacity="0.9"/>
+            </svg>
+        </button>
+        <div class="cluster-panel" id="cluster-panel">
+            <div class="cluster-panel-header">
+                <input type="text" class="cluster-search" id="cluster-search" placeholder="Search cluster...">
+                <div class="cluster-panel-actions">
+                    <button class="cluster-action-btn" id="cluster-select-all">All</button>
+                    <button class="cluster-action-btn" id="cluster-select-none">None</button>
+                </div>
+            </div>
+            <div class="cluster-grid" id="cluster-grid"></div>
+            <div class="cluster-panel-footer">
+                <span id="cluster-count">0 / 0 clusters</span>
+            </div>
+        </div>
+    </div>
+
     <div class="map-info" id="map-info">
         X: 0 Y: 0 Scale: 1.0
     </div>
 
-    <script type="module" src="script.js"></script>
+    <script type="module" src="js/main.js"></script>
 </body>
 </html>
