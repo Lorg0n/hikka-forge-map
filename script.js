@@ -11,6 +11,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const mapWidth = 6000;
     const mapHeight = 6000;
+    const mapCenterX = mapWidth / 2;
+    const mapCenterY = mapHeight / 2;
+    const scaleCoordinates = 20;
+    const viewportBuffer = 500; // px buffer around viewport for culling
 
     let isDragging = false;
     let startPos = { x: 0, y: 0 };
@@ -23,99 +27,148 @@ document.addEventListener('DOMContentLoaded', async () => {
     let tooltipVisible = false;
     let tooltipTimer = null;
     let animeCache = {};
+    let allPoints = [];       // full dataset, sorted by x
+    let visiblePoints = new Map(); // slug -> DOM element, currently in DOM
+    let transformPending = false;
+
     currentPos = {
         x: window.innerWidth / 2 - mapWidth / 2,
         y: window.innerHeight / 2 - mapHeight / 2
     };
     updateMapTransform();
     addCoordinateMarkers();
-    let points = [];
+
     try {
         const response = await fetch('anime_map.json');
-        points = await response.json();
-        renderPoints(points);
+        allPoints = await response.json();
+        // Pre-sort by x for fast viewport range queries
+        allPoints.sort((a, b) => a.x - b.x);
+        updateVisiblePoints(true);
     } catch (error) {
         console.error('Error loading anime points:', error);
-        points = [];
-        renderPoints(points);
+        allPoints = [];
     }
+
     function addCoordinateMarkers() {
         const step = 500;
-        const centerX = mapWidth / 2;
-        const centerY = mapHeight / 2;
+        const fragment = document.createDocumentFragment();
         for (let x = 0; x <= mapWidth; x += step) {
-            if (x === centerX) continue;
-            const xValue = (x - centerX) / 20;
+            if (x === mapCenterX) continue;
+            const xValue = (x - mapCenterX) / scaleCoordinates;
             const marker = document.createElement('div');
             marker.className = 'coordinate-marker';
             marker.textContent = xValue;
             marker.style.left = `${x}px`;
-            marker.style.top = `${centerY + 15}px`;
-            map.appendChild(marker);
+            marker.style.top = `${mapCenterY + 15}px`;
+            fragment.appendChild(marker);
         }
         for (let y = 0; y <= mapHeight; y += step) {
-            if (y === centerY) continue;
-            const yValue = -((y - centerY) / 20);
+            if (y === mapCenterY) continue;
+            const yValue = -((y - mapCenterY) / scaleCoordinates);
             const marker = document.createElement('div');
             marker.className = 'coordinate-marker';
             marker.textContent = yValue;
-            marker.style.left = `${centerX + 15}px`;
+            marker.style.left = `${mapCenterX + 15}px`;
             marker.style.top = `${y}px`;
-            map.appendChild(marker);
+            fragment.appendChild(marker);
         }
         const centerMarker = document.createElement('div');
         centerMarker.className = 'coordinate-marker';
         centerMarker.textContent = '0,0';
-        centerMarker.style.left = `${centerX}px`;
-        centerMarker.style.top = `${centerY}px`;
-        map.appendChild(centerMarker);    
+        centerMarker.style.left = `${mapCenterX}px`;
+        centerMarker.style.top = `${mapCenterY}px`;
+        fragment.appendChild(centerMarker);
+        map.appendChild(fragment);
     }
 
-    function renderPoints(points) {
-        const markers = document.querySelectorAll('.coordinate-marker');
-        const markersArray = Array.from(markers);
-        const axes = [
-            document.querySelector('.axis-x'),
-            document.querySelector('.axis-y'),
-            document.querySelector('.grid-lines')
-        ];
+    // Viewport culling — only render points visible in the viewport
+    function updateVisiblePoints(forceUpdate = false) {
+        // Calculate viewport bounds in map coordinates
+        const viewportLeft = -currentPos.x / scale - viewportBuffer;
+        const viewportTop = -currentPos.y / scale - viewportBuffer;
+        const viewportRight = (window.innerWidth - currentPos.x) / scale + viewportBuffer;
+        const viewportBottom = (window.innerHeight - currentPos.y) / scale + viewportBuffer;
 
-        const existingPoints = document.querySelectorAll('.point');
-        existingPoints.forEach(point => point.remove());
-        points.forEach(point => {
-            const mapCenterX = mapWidth / 2;
-            const mapCenterY = mapHeight / 2;
+        // Binary search for the first point whose screenX >= viewportLeft
+        let lo = 0;
+        let hi = allPoints.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            const screenX = mapCenterX + allPoints[mid].x * scaleCoordinates;
+            if (screenX < viewportLeft) lo = mid + 1;
+            else hi = mid;
+        }
 
-            const scaleCoordinates = 20;
-            const screenPointX = mapCenterX + point.x * scaleCoordinates;
-            const screenPointY = mapCenterY + point.y * scaleCoordinates;
+        // Collect visible slugs
+        const newVisibleSlugs = new Set();
+        for (let i = lo; i < allPoints.length; i++) {
+            const p = allPoints[i];
+            const screenX = mapCenterX + p.x * scaleCoordinates;
+            if (screenX > viewportRight) break;
+            const screenY = mapCenterY + p.y * scaleCoordinates;
+            if (screenY >= viewportTop && screenY <= viewportBottom) {
+                newVisibleSlugs.add(p.slug);
+            }
+        }
+
+        // Skip DOM work if nothing changed
+        if (!forceUpdate && setsEqual(newVisibleSlugs, visiblePoints.keys())) {
+            return;
+        }
+
+        // Remove points that are no longer visible
+        for (const [slug, el] of visiblePoints) {
+            if (!newVisibleSlugs.has(slug)) {
+                el.remove();
+                visiblePoints.delete(slug);
+            }
+        }
+
+        // Add points that are newly visible (batched via DocumentFragment)
+        const fragment = document.createDocumentFragment();
+        for (const p of allPoints) {
+            if (!newVisibleSlugs.has(p.slug)) continue;
+            if (visiblePoints.has(p.slug)) continue;
+
+            const screenX = mapCenterX + p.x * scaleCoordinates;
+            const screenY = mapCenterY + p.y * scaleCoordinates;
 
             const pointElement = document.createElement('div');
             pointElement.className = 'point';
+            pointElement.style.left = `${screenX}px`;
+            pointElement.style.top = `${screenY}px`;
+            pointElement.dataset.slug = p.slug;
+            pointElement.dataset.x = p.x;
+            pointElement.dataset.y = p.y;
 
-            pointElement.style.left = `${screenPointX}px`;
-            pointElement.style.top = `${screenPointY}px`;
-            pointElement.dataset.slug = point.slug;
-            pointElement.dataset.x = point.x;
-            pointElement.dataset.y = point.y;
+            fragment.appendChild(pointElement);
+            visiblePoints.set(p.slug, pointElement);
+        }
+        map.appendChild(fragment);
+    }
 
-            pointElement.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const pointRect = e.target.getBoundingClientRect();
-                const centerX = pointRect.left + pointRect.width / 2;
-                const centerY = pointRect.top - 15;
+    function setsEqual(a, b) {
+        if (a.size !== b.size) return false;
+        for (const v of a) {
+            if (!b.has(v)) return false;
+        }
+        return true;
+    }
 
-                if (selectedPointSlug === point.slug) {
-                    hideTooltip();
-                    return;
-                }
-                
-                selectedPointSlug = point.slug;
-
-                fetchAnimeInfo(point.slug, centerX, centerY);
+    // rAF-batched transform + visibility update
+    function requestUpdateTransform() {
+        if (!transformPending) {
+            transformPending = true;
+            requestAnimationFrame(() => {
+                updateMapTransform();
+                updateVisiblePoints();
+                transformPending = false;
             });
-            map.appendChild(pointElement);
-        });
+        }
+    }
+
+    function updateMapTransform() {
+        map.style.transform = `translate(${currentPos.x}px, ${currentPos.y}px) scale(${scale})`;
     }
 
     async function fetchAnimeInfo(slug, x, y) {
@@ -190,15 +243,15 @@ document.addEventListener('DOMContentLoaded', async () => {
             const tooltipRect = tooltip.getBoundingClientRect();
             const windowWidth = window.innerWidth;
             const windowHeight = window.innerHeight;
-    
+
             let transformX = '-50%';
             let transformY = '-100%';
-    
+
             if (tooltipRect.right > windowWidth) {
                 const newLeft = windowWidth - tooltipRect.width - 10;
                 tooltip.style.left = `${newLeft}px`;
                 transformX = '0';
-            } 
+            }
             else if (tooltipRect.left < 0) {
                 tooltip.style.left = '10px';
                 transformX = '0';
@@ -218,15 +271,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         selectedPointSlug = null;
     }
 
-    function formatStatus(status) {
-        const statuses = {
-            'finished': 'Finished',
-            'ongoing': 'Ongoing',
-            'upcoming': 'Upcoming',
-            'unknown': 'Unknown'
-        };
-        return statuses[status] || status;
-    }
     function formatMediaType(type) {
         const types = {
             'tv': 'TV',
@@ -239,8 +283,29 @@ document.addEventListener('DOMContentLoaded', async () => {
         return types[type] || type;
     }
 
+    // Event delegation for point clicks — one listener instead of 10K
+    map.addEventListener('click', (e) => {
+        const pointEl = e.target.closest('.point');
+        if (pointEl) {
+            e.stopPropagation();
+            const slug = pointEl.dataset.slug;
+            const pointRect = pointEl.getBoundingClientRect();
+            const centerX = pointRect.left + pointRect.width / 2;
+            const centerY = pointRect.top - 15;
+
+            if (selectedPointSlug === slug) {
+                hideTooltip();
+                return;
+            }
+
+            selectedPointSlug = slug;
+            fetchAnimeInfo(slug, centerX, centerY);
+            return;
+        }
+    });
+
     map.addEventListener('mousedown', (e) => {
-        if (e.target === map || e.target.classList.contains('grid-lines') ||
+        if (e.target === map ||
             e.target.classList.contains('axis-x') || e.target.classList.contains('axis-y')) {
             isDragging = true;
             map.classList.add('grabbing');
@@ -256,9 +321,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             const dy = e.clientY - startPos.y;
             currentPos.x += dx;
             currentPos.y += dy;
-            updateMapTransform();
             updateMapInfo();
             startPos = { x: e.clientX, y: e.clientY };
+            requestUpdateTransform();
         }
     });
     document.addEventListener('mouseup', () => {
@@ -267,7 +332,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     map.addEventListener('touchstart', (e) => {
-        if (e.target === map || e.target.classList.contains('grid-lines') ||
+        if (e.target === map ||
             e.target.classList.contains('axis-x') || e.target.classList.contains('axis-y')) {
             isDragging = true;
             const touch = e.touches[0];
@@ -283,9 +348,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             const dy = touch.clientY - startPos.y;
             currentPos.x += dx;
             currentPos.y += dy;
-            updateMapTransform();
             updateMapInfo();
             startPos = { x: touch.clientX, y: touch.clientY };
+            requestUpdateTransform();
             e.preventDefault();
         }
     });
@@ -305,24 +370,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         const delta = e.deltaY > 0 ? -zoomSpeed : zoomSpeed;
         const newScale = Math.max(minScale, Math.min(maxScale, scale + delta));
 
-        const rect = map.getBoundingClientRect();
         const mouseX = e.clientX;
         const mouseY = e.clientY;
 
         if (newScale !== scale) {
             const scaleRatio = newScale / scale;
 
-            const mapMouseX = mouseX - rect.left;
-            const mapMouseY = mouseY - rect.top;
-
-            const dx = mapMouseX - (rect.width / 2);
-            const dy = mapMouseY - (rect.height / 2);
-
-            currentPos.x -= dx * (scaleRatio - 1);
-            currentPos.y -= dy * (scaleRatio - 1);
+            currentPos.x -= (mouseX - currentPos.x) * (scaleRatio - 1);
+            currentPos.y -= (mouseY - currentPos.y) * (scaleRatio - 1);
             scale = newScale;
-            updateMapTransform();
             updateMapInfo();
+            requestUpdateTransform();
         }
     });
 
@@ -345,19 +403,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         const viewportCenterX = window.innerWidth / 2;
         const viewportCenterY = window.innerHeight / 2;
 
-        const rect = map.getBoundingClientRect();
-
-        const mapCenterX = viewportCenterX - rect.left;
-        const mapCenterY = viewportCenterY - rect.top;
-
-        const dx = mapCenterX - (rect.width / 2);
-        const dy = mapCenterY - (rect.height / 2);
-
-        currentPos.x -= dx * (scaleRatio - 1);
-        currentPos.y -= dy * (scaleRatio - 1);
+        currentPos.x -= (viewportCenterX - currentPos.x) * (scaleRatio - 1);
+        currentPos.y -= (viewportCenterY - currentPos.y) * (scaleRatio - 1);
         scale = newScale;
-        updateMapTransform();
         updateMapInfo();
+        requestUpdateTransform();
     }
     resetBtn.addEventListener('click', () => {
         scale = 1;
@@ -365,13 +415,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             x: window.innerWidth / 2 - mapWidth / 2,
             y: window.innerHeight / 2 - mapHeight / 2
         };
-        updateMapTransform();
         updateMapInfo();
+        requestUpdateTransform();
     });
-
-    function updateMapTransform() {
-        map.style.transform = `translate(${currentPos.x}px, ${currentPos.y}px) scale(${scale})`;
-    }
 
     function updateMapInfo() {
         const viewportCenterX = (window.innerWidth / 2 - currentPos.x) / scale;
@@ -379,8 +425,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         const centerX = mapWidth / 2;
         const centerY = mapHeight / 2;
-        const coordX = ((viewportCenterX - centerX) / 20).toFixed(1);
-        const coordY = (-((viewportCenterY - centerY) / 20)).toFixed(1);
+        const coordX = ((viewportCenterX - centerX) / scaleCoordinates).toFixed(1);
+        const coordY = (-((viewportCenterY - centerY) / scaleCoordinates)).toFixed(1);
         mapInfo.textContent = `X: ${coordX} Y: ${coordY} Scale: ${scale.toFixed(1)}`;
     }
 
@@ -391,9 +437,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             x: window.innerWidth / 2 - mapWidth / 2,
             y: window.innerHeight / 2 - mapHeight / 2
         };
-        updateMapTransform();
         updateMapInfo();
-
+        requestUpdateTransform();
         hideTooltip();
     });
 });
