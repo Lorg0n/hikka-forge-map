@@ -30,6 +30,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     let animeCache = {};
     let allPoints = [];       // full dataset, sorted by x
     let visiblePoints = new Map(); // slug -> DOM element, currently in DOM
+    let clusterColors = {};   // cluster_id -> hex color
     let transformPending = false;
 
     currentPos = {
@@ -40,8 +41,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     addCoordinateMarkers();
 
     try {
-        const response = await fetch('anime_map.json');
-        allPoints = await response.json();
+        const [mapResponse, colorsResponse] = await Promise.all([
+            fetch('anime_map.json'),
+            fetch('cluster_colors.json')
+        ]);
+        allPoints = await mapResponse.json();
+        clusterColors = await colorsResponse.json();
         // Pre-sort by x for fast viewport range queries
         allPoints.sort((a, b) => a.x - b.x);
         updateVisiblePoints(true);
@@ -141,6 +146,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             pointElement.dataset.slug = p.slug;
             pointElement.dataset.x = p.x;
             pointElement.dataset.y = p.y;
+            pointElement.style.setProperty('--cluster-color', clusterColors[p.cluster] || '#E779C1');
 
             fragment.appendChild(pointElement);
             visiblePoints.set(p.slug, pointElement);

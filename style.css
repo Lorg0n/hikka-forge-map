@@ -58,10 +58,10 @@ body {
     position: absolute;
     width: 4px;
     height: 4px;
-    background-color: #E779C1;
+    background-color: var(--cluster-color, #E779C1);
     border-radius: 50%;
     transform: translate(-50%, -50%);
-    transition: background-color 0.15s ease;
+    transition: background-color 0.15s ease, box-shadow 0.15s ease;
     cursor: pointer;
     z-index: 10;
 }
