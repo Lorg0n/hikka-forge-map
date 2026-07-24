@@ -5,6 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <title>Hikka Anime Title Map</title>
     <link rel="stylesheet" href="style.css">
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/"
+        }
+    }
+    </script>
 </head>
 <body>
     <div class="map-container">
@@ -13,6 +21,7 @@
             <div class="axis-y"></div>
             <!-- Points will be added here by JavaScript -->
         </div>
+        <div class="canvas-container hidden" id="canvas-container"></div>
         <div class="loading" id="loading"></div>
         <div class="point-loading" id="point-loading"></div>
     </div>
@@ -29,6 +38,9 @@
     </div>
 
     <div class="controls">
+        <button class="control-btn mode-toggle" id="mode-toggle" title="Switch between 2D and 3D view">
+            <span class="mode-label" id="mode-label">3D</span>
+        </button>
         <button class="control-btn" id="zoom-in">+</button>
         <button class="control-btn" id="zoom-out">-</button>
         <button class="control-btn" id="reset">⟲</button>
@@ -38,6 +50,6 @@
         X: 0 Y: 0 Scale: 1.0
     </div>
 
-    <script src="script.js"></script>
+    <script type="module" src="script.js"></script>
 </body>
 </html>

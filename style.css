@@ -14,6 +14,25 @@ body {
     overflow: hidden;
 }
 
+.canvas-container {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 5;
+}
+
+.canvas-container canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.hidden {
+    display: none !important;
+}
+
 .map {
     position: absolute;
     /* Map size */
@@ -250,6 +269,20 @@ body {
 
 .control-btn:hover {
     background-color: rgb(39, 39, 39);
+}
+
+.mode-toggle {
+    border-radius: 20px;
+    width: auto;
+    padding: 0 14px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    font-family: 'Inter', Arial, sans-serif;
+}
+
+.mode-toggle .mode-label {
+    pointer-events: none;
 }
 
 .tooltip {

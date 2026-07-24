@@ -1,5 +1,9 @@
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
 document.addEventListener('DOMContentLoaded', async () => {
     const map = document.getElementById('map');
+    const canvasContainer = document.getElementById('canvas-container');
     const loading = document.getElementById('loading');
     const pointLoading = document.getElementById('point-loading');
     const tooltip = document.getElementById('tooltip');
@@ -8,13 +12,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     const zoomOutBtn = document.getElementById('zoom-out');
     const resetBtn = document.getElementById('reset');
     const mapInfo = document.getElementById('map-info');
+    const modeToggle = document.getElementById('mode-toggle');
+    const modeLabel = document.getElementById('mode-label');
 
     const mapWidth = 6000;
     const mapHeight = 6000;
     const mapCenterX = mapWidth / 2;
     const mapCenterY = mapHeight / 2;
     const scaleCoordinates = 20;
-    const viewportBuffer = 500; // px buffer around viewport for culling
+    const viewportBuffer = 500;
 
     let isDragging = false;
     let startPos = { x: 0, y: 0 };
@@ -28,10 +34,31 @@ document.addEventListener('DOMContentLoaded', async () => {
     let tooltipVisible = false;
     let tooltipTimer = null;
     let animeCache = {};
-    let allPoints = [];       // full dataset, sorted by x
-    let visiblePoints = new Map(); // slug -> DOM element, currently in DOM
-    let clusterColors = {};   // cluster_id -> hex color
+    let allPoints = [];
+    let visiblePoints = new Map();
+    let clusterColors = {};
     let transformPending = false;
+
+    // --- 3D mode state ---
+    let is3DMode = false;
+    let threeScene = null;
+    let threeCamera = null;
+    let threeRenderer = null;
+    let threeControls = null;
+    let threePoints = null;
+    let threeRaycaster = new THREE.Raycaster();
+    let threeMouse = new THREE.Vector2();
+    let threeSlugIndex = [];
+    let threeSlugToPoint = {};
+    let threeAnimating = false;
+    let threeSelectedPoint = null;
+    let threeSelectedSlug = null;
+    let threeIsOrbiting = false;
+    let threeOrbitStartX = 0;
+    let threeOrbitStartY = 0;
+    let threeLastPointerX = 0;
+    let threeLastPointerY = 0;
+    const THREE_SCALE = 3;
 
     currentPos = {
         x: window.innerWidth / 2 - mapWidth / 2,
@@ -47,122 +74,369 @@ document.addEventListener('DOMContentLoaded', async () => {
         ]);
         allPoints = await mapResponse.json();
         clusterColors = await colorsResponse.json();
-        // Pre-sort by x for fast viewport range queries
         allPoints.sort((a, b) => a.x - b.x);
         updateVisiblePoints(true);
+        buildThreeData();
     } catch (error) {
         console.error('Error loading anime points:', error);
         allPoints = [];
     }
+
+    // =========================================================
+    // 3D MODE — Three.js
+    // =========================================================
+
+    function initThreeJS() {
+        if (threeScene) return;
+
+        threeScene = new THREE.Scene();
+        threeScene.background = new THREE.Color(0x080808);
+
+        threeCamera = new THREE.PerspectiveCamera(
+            60, window.innerWidth / window.innerHeight, 0.1, 10000
+        );
+        threeCamera.position.set(0, 200, 300);
+
+        threeRenderer = new THREE.WebGLRenderer({ antialias: true });
+        threeRenderer.setSize(window.innerWidth, window.innerHeight);
+        threeRenderer.setPixelRatio(window.devicePixelRatio);
+        canvasContainer.appendChild(threeRenderer.domElement);
+
+        threeControls = new OrbitControls(threeCamera, threeRenderer.domElement);
+        threeControls.enableDamping = true;
+        threeControls.dampingFactor = 0.08;
+        threeControls.rotateSpeed = 0.6;
+        threeControls.panSpeed = 0.8;
+        threeControls.zoomSpeed = 1.2;
+        threeControls.mouseButtons = {
+            LEFT: THREE.MOUSE.ROTATE,
+            MIDDLE: THREE.MOUSE.DOLLY,
+            RIGHT: THREE.MOUSE.PAN
+        };
+        threeControls.target.set(0, 0, 0);
+        threeControls.update();
+
+        const gridHelper = new THREE.GridHelper(600, 30, 0x222222, 0x151515);
+        threeScene.add(gridHelper);
+        threeScene.add(new THREE.AmbientLight(0xffffff, 1.0));
+
+        threeControls.addEventListener('start', () => {
+            threeIsOrbiting = true;
+            threeOrbitStartX = threeLastPointerX;
+            threeOrbitStartY = threeLastPointerY;
+        });
+        threeControls.addEventListener('change', () => {
+            if (is3DMode) updateMapInfo3D();
+        });
+        threeControls.addEventListener('end', () => {
+            threeIsOrbiting = false;
+            const dx = threeLastPointerX - threeOrbitStartX;
+            const dy = threeLastPointerY - threeOrbitStartY;
+            if (Math.sqrt(dx * dx + dy * dy) > 8) {
+                hideTooltip();
+                clearHighlight3D();
+            }
+        });
+    }
+
+    function buildThreeData() {
+        threeSlugIndex = [];
+        threeSlugToPoint = {};
+        for (const p of allPoints) {
+            threeSlugIndex.push(p.slug);
+            threeSlugToPoint[p.slug] = { x3d: p.x3d || 0, y3d: p.y3d || 0, z3d: p.z3d || 0 };
+        }
+    }
+
+    function createThreePoints() {
+        if (threePoints) {
+            threeScene.remove(threePoints);
+            threePoints.geometry.dispose();
+            threePoints.material.dispose();
+        }
+
+        const n = allPoints.length;
+        const positions = new Float32Array(n * 3);
+        const colors = new Float32Array(n * 3);
+        const tempColor = new THREE.Color();
+
+        for (let i = 0; i < n; i++) {
+            const p = allPoints[i];
+            positions[i * 3]     = (p.x3d || 0) * THREE_SCALE;
+            positions[i * 3 + 1] = (p.y3d || 0) * THREE_SCALE;
+            positions[i * 3 + 2] = (p.z3d || 0) * THREE_SCALE;
+
+            const hex = clusterColors[p.cluster] || '#E779C1';
+            tempColor.set(hex);
+            colors[i * 3]     = tempColor.r;
+            colors[i * 3 + 1] = tempColor.g;
+            colors[i * 3 + 2] = tempColor.b;
+        }
+
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+        threePoints = new THREE.Points(geometry, new THREE.PointsMaterial({
+            size: 3,
+            sizeAttenuation: false,
+            vertexColors: true,
+        }));
+        threeScene.add(threePoints);
+
+        // Highlight marker for selected point (circular, always on top)
+        if (threeSelectedPoint) {
+            threeScene.remove(threeSelectedPoint);
+            threeSelectedPoint.geometry.dispose();
+            threeSelectedPoint.material.dispose();
+        }
+        const circleSize = 64;
+        const circleCanvas = document.createElement('canvas');
+        circleCanvas.width = circleSize;
+        circleCanvas.height = circleSize;
+        const circleCtx = circleCanvas.getContext('2d');
+        circleCtx.beginPath();
+        circleCtx.arc(circleSize / 2, circleSize / 2, circleSize / 2, 0, Math.PI * 2);
+        circleCtx.fillStyle = '#ffffff';
+        circleCtx.fill();
+        const circleTexture = new THREE.CanvasTexture(circleCanvas);
+
+        const highlightGeo = new THREE.BufferGeometry();
+        highlightGeo.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0], 3));
+        const highlightMat = new THREE.PointsMaterial({
+            size: 12,
+            sizeAttenuation: false,
+            map: circleTexture,
+            transparent: true,
+            opacity: 0.9,
+            depthTest: false,
+            depthWrite: false,
+        });
+        threeSelectedPoint = new THREE.Points(highlightGeo, highlightMat);
+        threeSelectedPoint.visible = false;
+        threeSelectedPoint.renderOrder = 999;
+        threeScene.add(threeSelectedPoint);
+    }
+
+    function startThreeRenderLoop() {
+        if (threeAnimating) return;
+        threeAnimating = true;
+        (function animate() {
+            if (!is3DMode) { threeAnimating = false; return; }
+            requestAnimationFrame(animate);
+            threeControls.update();
+            if (threeSelectedPoint && threeSelectedPoint.visible) {
+                threeSelectedPoint.material.opacity = 0.65 + 0.35 * Math.sin(performance.now() * 0.004);
+            }
+            repositionTooltip3D();
+            threeRenderer.render(threeScene, threeCamera);
+        })();
+    }
+
+    function stopThreeRenderLoop() { threeAnimating = false; }
+
+    function enter3DMode() {
+        is3DMode = true;
+        initThreeJS();
+        createThreePoints();
+        map.classList.add('hidden');
+        canvasContainer.classList.remove('hidden');
+        modeLabel.textContent = '2D';
+        threeRenderer.setSize(window.innerWidth, window.innerHeight);
+        threeCamera.aspect = window.innerWidth / window.innerHeight;
+        threeCamera.updateProjectionMatrix();
+        hideTooltip();
+        clearHighlight3D();
+        updateMapInfo3D();
+        startThreeRenderLoop();
+    }
+
+    function exit3DMode() {
+        is3DMode = false;
+        canvasContainer.classList.add('hidden');
+        map.classList.remove('hidden');
+        modeLabel.textContent = '3D';
+        hideTooltip();
+        stopThreeRenderLoop();
+        updateMapInfo();
+    }
+
+    modeToggle.addEventListener('click', () => {
+        is3DMode ? exit3DMode() : enter3DMode();
+    });
+
+    // =========================================================
+    // 3D click + tooltip
+    // =========================================================
+
+    canvasContainer.addEventListener('click', (event) => {
+        if (!is3DMode || !threePoints) return;
+        const rect = threeRenderer.domElement.getBoundingClientRect();
+        threeMouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        threeMouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+        threeRaycaster.setFromCamera(threeMouse, threeCamera);
+        const intersects = threeRaycaster.intersectObject(threePoints);
+
+        if (intersects.length > 0) {
+            const slug = threeSlugIndex[intersects[0].index];
+            if (!slug) return;
+            if (selectedPointSlug === slug) { hideTooltip(); clearHighlight3D(); return; }
+            clearHighlight3D();
+            selectedPointSlug = slug;
+            highlight3DPoint(slug);
+            const screenPos = threeToScreen(intersects[0].point);
+            fetchAnimeInfo(slug, screenPos.x, screenPos.y - 15);
+        } else {
+            hideTooltip();
+            clearHighlight3D();
+        }
+    });
+
+    canvasContainer.addEventListener('pointermove', (e) => {
+        threeLastPointerX = e.clientX;
+        threeLastPointerY = e.clientY;
+    });
+
+    function threeToScreen(worldPos) {
+        const v = worldPos.clone().project(threeCamera);
+        return {
+            x: (v.x * 0.5 + 0.5) * window.innerWidth,
+            y: (-v.y * 0.5 + 0.5) * window.innerHeight
+        };
+    }
+
+    function highlight3DPoint(slug) {
+        const pt = threeSlugToPoint[slug];
+        if (!pt || !threeSelectedPoint) return;
+        const pos = threeSelectedPoint.geometry.attributes.position;
+        pos.setXYZ(0, (pt.x3d || 0) * THREE_SCALE, (pt.y3d || 0) * THREE_SCALE, (pt.z3d || 0) * THREE_SCALE);
+        pos.needsUpdate = true;
+        threeSelectedPoint.visible = true;
+        threeSelectedSlug = slug;
+    }
+
+    function clearHighlight3D() {
+        if (threeSelectedPoint) threeSelectedPoint.visible = false;
+        threeSelectedSlug = null;
+    }
+
+    function repositionTooltip3D() {
+        if (!tooltipVisible || !threeSelectedSlug || !is3DMode) return;
+        const pt = threeSlugToPoint[threeSelectedSlug];
+        if (!pt) return;
+        const worldPos = new THREE.Vector3(
+            (pt.x3d || 0) * THREE_SCALE,
+            (pt.y3d || 0) * THREE_SCALE,
+            (pt.z3d || 0) * THREE_SCALE
+        );
+        const screenPos = threeToScreen(worldPos);
+        tooltip.style.left = `${screenPos.x}px`;
+        tooltip.style.top = `${screenPos.y - 15}px`;
+        tooltip.style.transform = 'translate(-50%, -100%)';
+        const tr = tooltip.getBoundingClientRect();
+        let tx = '-50%', ty = '-100%';
+        if (tr.right > window.innerWidth) { tooltip.style.left = `${window.innerWidth - tr.width - 10}px`; tx = '0'; }
+        else if (tr.left < 0) { tooltip.style.left = '10px'; tx = '0'; }
+        const ur = tooltip.getBoundingClientRect();
+        if (ur.top < 0) { tooltip.style.top = `${screenPos.y + 20}px`; ty = '0'; }
+        else if (ur.bottom > window.innerHeight) { tooltip.style.top = `${screenPos.y - 15}px`; ty = '-100%'; }
+        tooltip.style.transform = `translate(${tx}, ${ty})`;
+    }
+
+    function updateMapInfo3D() {
+        if (!threeCamera || !threeControls) return;
+        const dist = threeCamera.position.distanceTo(threeControls.target);
+        const azimuth = THREE.MathUtils.radToDeg(threeControls.getAzimuthalAngle()).toFixed(0);
+        const polar = THREE.MathUtils.radToDeg(threeControls.getPolarAngle()).toFixed(0);
+        mapInfo.textContent = `Azimuth: ${azimuth}\u00B0 Polar: ${polar}\u00B0 Dist: ${dist.toFixed(0)}`;
+    }
+
+    // =========================================================
+    // 2D MAP
+    // =========================================================
 
     function addCoordinateMarkers() {
         const step = 500;
         const fragment = document.createDocumentFragment();
         for (let x = 0; x <= mapWidth; x += step) {
             if (x === mapCenterX) continue;
-            const xValue = (x - mapCenterX) / scaleCoordinates;
             const marker = document.createElement('div');
             marker.className = 'coordinate-marker';
-            marker.textContent = xValue;
+            marker.textContent = (x - mapCenterX) / scaleCoordinates;
             marker.style.left = `${x}px`;
             marker.style.top = `${mapCenterY + 15}px`;
             fragment.appendChild(marker);
         }
         for (let y = 0; y <= mapHeight; y += step) {
             if (y === mapCenterY) continue;
-            const yValue = -((y - mapCenterY) / scaleCoordinates);
             const marker = document.createElement('div');
             marker.className = 'coordinate-marker';
-            marker.textContent = yValue;
+            marker.textContent = -((y - mapCenterY) / scaleCoordinates);
             marker.style.left = `${mapCenterX + 15}px`;
             marker.style.top = `${y}px`;
             fragment.appendChild(marker);
         }
-        const centerMarker = document.createElement('div');
-        centerMarker.className = 'coordinate-marker';
-        centerMarker.textContent = '0,0';
-        centerMarker.style.left = `${mapCenterX}px`;
-        centerMarker.style.top = `${mapCenterY}px`;
-        fragment.appendChild(centerMarker);
+        const c = document.createElement('div');
+        c.className = 'coordinate-marker';
+        c.textContent = '0,0';
+        c.style.left = `${mapCenterX}px`;
+        c.style.top = `${mapCenterY}px`;
+        fragment.appendChild(c);
         map.appendChild(fragment);
     }
 
-    // Viewport culling — only render points visible in the viewport
     function updateVisiblePoints(forceUpdate = false) {
-        // Calculate viewport bounds in map coordinates
-        const viewportLeft = -currentPos.x / scale - viewportBuffer;
-        const viewportTop = -currentPos.y / scale - viewportBuffer;
-        const viewportRight = (window.innerWidth - currentPos.x) / scale + viewportBuffer;
-        const viewportBottom = (window.innerHeight - currentPos.y) / scale + viewportBuffer;
+        const vL = -currentPos.x / scale - viewportBuffer;
+        const vT = -currentPos.y / scale - viewportBuffer;
+        const vR = (window.innerWidth - currentPos.x) / scale + viewportBuffer;
+        const vB = (window.innerHeight - currentPos.y) / scale + viewportBuffer;
 
-        // Binary search for the first point whose screenX >= viewportLeft
-        let lo = 0;
-        let hi = allPoints.length;
+        let lo = 0, hi = allPoints.length;
         while (lo < hi) {
             const mid = (lo + hi) >> 1;
-            const screenX = mapCenterX + allPoints[mid].x * scaleCoordinates;
-            if (screenX < viewportLeft) lo = mid + 1;
+            if (mapCenterX + allPoints[mid].x * scaleCoordinates < vL) lo = mid + 1;
             else hi = mid;
         }
 
-        // Collect visible slugs
         const newVisibleSlugs = new Set();
         for (let i = lo; i < allPoints.length; i++) {
             const p = allPoints[i];
-            const screenX = mapCenterX + p.x * scaleCoordinates;
-            if (screenX > viewportRight) break;
-            const screenY = mapCenterY + p.y * scaleCoordinates;
-            if (screenY >= viewportTop && screenY <= viewportBottom) {
-                newVisibleSlugs.add(p.slug);
-            }
+            const sx = mapCenterX + p.x * scaleCoordinates;
+            if (sx > vR) break;
+            const sy = mapCenterY + p.y * scaleCoordinates;
+            if (sy >= vT && sy <= vB) newVisibleSlugs.add(p.slug);
         }
 
-        // Skip DOM work if nothing changed
-        if (!forceUpdate && setsEqual(newVisibleSlugs, visiblePoints.keys())) {
-            return;
-        }
+        if (!forceUpdate && setsEqual(newVisibleSlugs, visiblePoints.keys())) return;
 
-        // Remove points that are no longer visible
         for (const [slug, el] of visiblePoints) {
-            if (!newVisibleSlugs.has(slug)) {
-                el.remove();
-                visiblePoints.delete(slug);
-            }
+            if (!newVisibleSlugs.has(slug)) { el.remove(); visiblePoints.delete(slug); }
         }
 
-        // Add points that are newly visible (batched via DocumentFragment)
         const fragment = document.createDocumentFragment();
         for (const p of allPoints) {
-            if (!newVisibleSlugs.has(p.slug)) continue;
-            if (visiblePoints.has(p.slug)) continue;
-
-            const screenX = mapCenterX + p.x * scaleCoordinates;
-            const screenY = mapCenterY + p.y * scaleCoordinates;
-
-            const pointElement = document.createElement('div');
-            pointElement.className = 'point';
-            pointElement.style.left = `${screenX}px`;
-            pointElement.style.top = `${screenY}px`;
-            pointElement.dataset.slug = p.slug;
-            pointElement.dataset.x = p.x;
-            pointElement.dataset.y = p.y;
-            pointElement.style.setProperty('--cluster-color', clusterColors[p.cluster] || '#E779C1');
-
-            fragment.appendChild(pointElement);
-            visiblePoints.set(p.slug, pointElement);
+            if (!newVisibleSlugs.has(p.slug) || visiblePoints.has(p.slug)) continue;
+            const el = document.createElement('div');
+            el.className = 'point';
+            el.style.left = `${mapCenterX + p.x * scaleCoordinates}px`;
+            el.style.top = `${mapCenterY + p.y * scaleCoordinates}px`;
+            el.dataset.slug = p.slug;
+            el.dataset.x = p.x;
+            el.dataset.y = p.y;
+            el.style.setProperty('--cluster-color', clusterColors[p.cluster] || '#E779C1');
+            fragment.appendChild(el);
+            visiblePoints.set(p.slug, el);
         }
         map.appendChild(fragment);
     }
 
     function setsEqual(a, b) {
         if (a.size !== b.size) return false;
-        for (const v of a) {
-            if (!b.has(v)) return false;
-        }
+        for (const v of a) if (!b.has(v)) return false;
         return true;
     }
 
-    // rAF-batched transform + visibility update
     function requestUpdateTransform() {
         if (!transformPending) {
             transformPending = true;
@@ -191,13 +465,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         try {
             const response = await fetch(`https://corsproxy.io/?url=https://api.hikka.io/anime/${slug}`, {
-                headers: {
-                    'accept': 'application/json'
-                }
+                headers: { 'accept': 'application/json' }
             });
-            if (!response.ok) {
-                throw new Error(`API request failed with status ${response.status}`);
-            }
+            if (!response.ok) throw new Error(`API ${response.status}`);
             const data = await response.json();
             animeCache[slug] = data;
             renderTooltip(data, x, y);
@@ -208,18 +478,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                 "title_en": "KonoSuba: God's Blessing on This Wonderful World!",
                 "title_ja": "Kono Subarashii Sekai ni Shukufuku wo!",
                 "image": "https://cdn.hikka.io/hikka.jpg",
-                "synopsis_en": "After dying a laughable and pathetic death on his way back from buying a game, high school student and recluse Kazuma Satou finds himself sitting before a beautiful but obnoxious goddess named Aqua...",
-                "episodes_total": 10,
-                "episodes_released": 10,
-                "status": "finished",
-                "media_type": "tv",
-                "score": 8.11,
-                "genres": [
-                    {
-                        "name_en": "Comedy",
-                        "name_ua": "Comedy"
-                    }
-                ]
+                "synopsis_en": "After dying a laughable and pathetic death on his way back from buying a game...",
+                "episodes_total": 10, "episodes_released": 10,
+                "status": "finished", "media_type": "tv", "score": 8.11,
+                "genres": [{ "name_en": "Comedy", "name_ua": "Comedy" }]
             };
             animeCache[slug] = demoData;
             renderTooltip(demoData, x, y);
@@ -243,7 +505,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 ${data.title_ja ? `<p class="tooltip-subtitle">${data.title_ja}</p>` : ''}
                 ${data.synopsis_ua ? `<div class="tooltip-desc">${data.synopsis_ua.slice(0, 150)}${data.synopsis_ua.length > 150 ? '...' : ''}</div>` : ''}
                 <div class="tooltip-info">
-                    ${data.score ? `<span>⭐ ${data.score}</span>` : ''}
+                    ${data.score ? `<span>${data.score}</span>` : ''}
                     ${data.media_type ? `<span>${formatMediaType(data.media_type)}</span>` : ''}
                     ${data.episodes_total ? `<span>${data.episodes_released}/${data.episodes_total} eps.</span>` : ''}
                 </div>
@@ -255,252 +517,177 @@ document.addEventListener('DOMContentLoaded', async () => {
         tooltip.style.display = 'block';
         tooltipVisible = true;
         setTimeout(() => {
-            const tooltipRect = tooltip.getBoundingClientRect();
-            const windowWidth = window.innerWidth;
-            const windowHeight = window.innerHeight;
-
-            let transformX = '-50%';
-            let transformY = '-100%';
-
-            if (tooltipRect.right > windowWidth) {
-                const newLeft = windowWidth - tooltipRect.width - 10;
-                tooltip.style.left = `${newLeft}px`;
-                transformX = '0';
+            const tr = tooltip.getBoundingClientRect();
+            let tx = '-50%', ty = '-100%';
+            if (tr.right > window.innerWidth) {
+                tooltip.style.left = `${window.innerWidth - tr.width - 10}px`; tx = '0';
+            } else if (tr.left < 0) {
+                tooltip.style.left = '10px'; tx = '0';
             }
-            else if (tooltipRect.left < 0) {
-                tooltip.style.left = '10px';
-                transformX = '0';
-            }
-            const updatedTooltipRect = tooltip.getBoundingClientRect();
-            if (updatedTooltipRect.top < 0) {
-                tooltip.style.top = `${y + 20}px`;
-                transformY = '0';
-            }
-            tooltip.style.transform = `translate(${transformX}, ${transformY})`;
+            const ur = tooltip.getBoundingClientRect();
+            if (ur.top < 0) { tooltip.style.top = `${y + 20}px`; ty = '0'; }
+            tooltip.style.transform = `translate(${tx}, ${ty})`;
         }, 0);
     }
 
     function hideTooltip() {
         tooltip.style.display = 'none';
         tooltipVisible = false;
-        if (selectedPointEl) {
-            selectedPointEl.classList.remove('selected');
-            selectedPointEl = null;
-        }
+        if (selectedPointEl) { selectedPointEl.classList.remove('selected'); selectedPointEl = null; }
         selectedPointSlug = null;
+        if (is3DMode) clearHighlight3D();
     }
 
     function repositionTooltip() {
         if (!tooltipVisible || !selectedPointEl) return;
         const rect = selectedPointEl.getBoundingClientRect();
-        const x = rect.left + rect.width / 2;
-        const y = rect.top - 15;
+        const x = rect.left + rect.width / 2, y = rect.top - 15;
         tooltip.style.left = `${x}px`;
         tooltip.style.top = `${y}px`;
-
-        const tooltipRect = tooltip.getBoundingClientRect();
-        const windowWidth = window.innerWidth;
-        const windowHeight = window.innerHeight;
-        let transformX = '-50%';
-        let transformY = '-100%';
-
-        if (tooltipRect.right > windowWidth) {
-            tooltip.style.left = `${windowWidth - tooltipRect.width - 10}px`;
-            transformX = '0';
-        } else if (tooltipRect.left < 0) {
-            tooltip.style.left = '10px';
-            transformX = '0';
-        }
-
-        const updatedRect = tooltip.getBoundingClientRect();
-        if (updatedRect.top < 0) {
-            tooltip.style.top = `${rect.bottom + 15}px`;
-            transformY = '0';
-        } else if (updatedRect.bottom > windowHeight) {
-            tooltip.style.top = `${rect.top - 15}px`;
-            transformY = '-100%';
-        }
-
-        tooltip.style.transform = `translate(${transformX}, ${transformY})`;
+        const tr = tooltip.getBoundingClientRect();
+        let tx = '-50%', ty = '-100%';
+        if (tr.right > window.innerWidth) { tooltip.style.left = `${window.innerWidth - tr.width - 10}px`; tx = '0'; }
+        else if (tr.left < 0) { tooltip.style.left = '10px'; tx = '0'; }
+        const ur = tooltip.getBoundingClientRect();
+        if (ur.top < 0) { tooltip.style.top = `${rect.bottom + 15}px`; ty = '0'; }
+        else if (ur.bottom > window.innerHeight) { tooltip.style.top = `${rect.top - 15}px`; ty = '-100%'; }
+        tooltip.style.transform = `translate(${tx}, ${ty})`;
     }
 
     function formatMediaType(type) {
-        const types = {
-            'tv': 'TV',
-            'movie': 'Movie',
-            'ova': 'OVA',
-            'ona': 'ONA',
-            'special': 'Special',
-            'music': 'Music Video'
-        };
-        return types[type] || type;
+        return ({ 'tv':'TV', 'movie':'Movie', 'ova':'OVA', 'ona':'ONA', 'special':'Special', 'music':'Music Video' })[type] || type;
     }
 
-    // Event delegation for point clicks — one listener instead of 10K
+    // =========================================================
+    // 2D event listeners
+    // =========================================================
+
     map.addEventListener('click', (e) => {
+        if (is3DMode) return;
         const pointEl = e.target.closest('.point');
         if (pointEl) {
             e.stopPropagation();
             const slug = pointEl.dataset.slug;
-            const pointRect = pointEl.getBoundingClientRect();
-            const centerX = pointRect.left + pointRect.width / 2;
-            const centerY = pointRect.top - 15;
-
-            if (selectedPointSlug === slug) {
-                hideTooltip();
-                return;
-            }
-
-            if (selectedPointEl) {
-                selectedPointEl.classList.remove('selected');
-            }
+            const r = pointEl.getBoundingClientRect();
+            if (selectedPointSlug === slug) { hideTooltip(); return; }
+            if (selectedPointEl) selectedPointEl.classList.remove('selected');
             selectedPointSlug = slug;
             selectedPointEl = pointEl;
             selectedPointEl.classList.add('selected');
-            fetchAnimeInfo(slug, centerX, centerY);
-            return;
+            fetchAnimeInfo(slug, r.left + r.width / 2, r.top - 15);
         }
     });
 
     map.addEventListener('mousedown', (e) => {
-        if (e.target === map ||
-            e.target.classList.contains('axis-x') || e.target.classList.contains('axis-y')) {
-            isDragging = true;
-            map.classList.add('grabbing');
+        if (is3DMode) return;
+        if (e.target === map || e.target.classList.contains('axis-x') || e.target.classList.contains('axis-y')) {
+            isDragging = true; map.classList.add('grabbing');
             startPos = { x: e.clientX, y: e.clientY };
-            if (!e.target.closest('.tooltip')) {
-                hideTooltip();
-            }
+            if (!e.target.closest('.tooltip')) hideTooltip();
         }
     });
     document.addEventListener('mousemove', (e) => {
-        if (isDragging) {
-            const dx = e.clientX - startPos.x;
-            const dy = e.clientY - startPos.y;
-            currentPos.x += dx;
-            currentPos.y += dy;
-            updateMapInfo();
-            startPos = { x: e.clientX, y: e.clientY };
-            requestUpdateTransform();
-        }
+        if (is3DMode || !isDragging) return;
+        currentPos.x += e.clientX - startPos.x;
+        currentPos.y += e.clientY - startPos.y;
+        updateMapInfo(); startPos = { x: e.clientX, y: e.clientY }; requestUpdateTransform();
     });
-    document.addEventListener('mouseup', () => {
-        isDragging = false;
-        map.classList.remove('grabbing');
-    });
+    document.addEventListener('mouseup', () => { if (!is3DMode) { isDragging = false; map.classList.remove('grabbing'); } });
 
     map.addEventListener('touchstart', (e) => {
-        if (e.target === map ||
-            e.target.classList.contains('axis-x') || e.target.classList.contains('axis-y')) {
-            isDragging = true;
-            const touch = e.touches[0];
-            startPos = { x: touch.clientX, y: touch.clientY };
-            hideTooltip();
-            e.preventDefault();
+        if (is3DMode) return;
+        if (e.target === map || e.target.classList.contains('axis-x') || e.target.classList.contains('axis-y')) {
+            isDragging = true; startPos = { x: e.touches[0].clientX, y: e.touches[0].clientY }; hideTooltip(); e.preventDefault();
         }
     });
     document.addEventListener('touchmove', (e) => {
-        if (isDragging) {
-            const touch = e.touches[0];
-            const dx = touch.clientX - startPos.x;
-            const dy = touch.clientY - startPos.y;
-            currentPos.x += dx;
-            currentPos.y += dy;
-            updateMapInfo();
-            startPos = { x: touch.clientX, y: touch.clientY };
-            requestUpdateTransform();
-            e.preventDefault();
-        }
+        if (is3DMode || !isDragging) return;
+        currentPos.x += e.touches[0].clientX - startPos.x;
+        currentPos.y += e.touches[0].clientY - startPos.y;
+        updateMapInfo(); startPos = { x: e.touches[0].clientX, y: e.touches[0].clientY }; requestUpdateTransform(); e.preventDefault();
     });
-    document.addEventListener('touchend', () => {
-        isDragging = false;
-    });
+    document.addEventListener('touchend', () => { if (!is3DMode) isDragging = false; });
 
     document.addEventListener('click', (e) => {
-        if (!e.target.classList.contains('point') &&
-            !e.target.closest('.tooltip')) {
-            hideTooltip();
-        }
+        if (!e.target.classList.contains('point') && !e.target.closest('.tooltip') && !e.target.closest('.canvas-container')) hideTooltip();
     });
+
     map.addEventListener('wheel', (e) => {
+        if (is3DMode) return;
         e.preventDefault();
-        const zoomSpeed = 0.1;
-        const delta = e.deltaY > 0 ? -zoomSpeed : zoomSpeed;
-        const newScale = Math.max(minScale, Math.min(maxScale, scale + delta));
-
-        const mouseX = e.clientX;
-        const mouseY = e.clientY;
-
-        if (newScale !== scale) {
-            const scaleRatio = newScale / scale;
-
-            currentPos.x -= (mouseX - currentPos.x) * (scaleRatio - 1);
-            currentPos.y -= (mouseY - currentPos.y) * (scaleRatio - 1);
-            scale = newScale;
-            updateMapInfo();
-            requestUpdateTransform();
+        const delta = e.deltaY > 0 ? -0.1 : 0.1;
+        const ns = Math.max(minScale, Math.min(maxScale, scale + delta));
+        if (ns !== scale) {
+            const r = ns / scale;
+            currentPos.x -= (e.clientX - currentPos.x) * (r - 1);
+            currentPos.y -= (e.clientY - currentPos.y) * (r - 1);
+            scale = ns; updateMapInfo(); requestUpdateTransform();
         }
     });
 
+    // Zoom buttons
     zoomInBtn.addEventListener('click', () => {
-        if (scale < maxScale) {
-            const newScale = Math.min(maxScale, scale + 0.2);
-            zoomTowardsCenter(newScale);
+        if (is3DMode) {
+            threeCamera.position.lerp(threeControls.target, 0.15);
+            updateMapInfo3D();
+        } else if (scale < maxScale) {
+            zoomTowardsCenter(Math.min(maxScale, scale + 0.2));
         }
     });
     zoomOutBtn.addEventListener('click', () => {
-        if (scale > minScale) {
-            const newScale = Math.max(minScale, scale - 0.2);
-            zoomTowardsCenter(newScale);
+        if (is3DMode) {
+            const dir = threeCamera.position.clone().sub(threeControls.target).normalize();
+            threeCamera.position.add(dir.multiplyScalar(50));
+            updateMapInfo3D();
+        } else if (scale > minScale) {
+            zoomTowardsCenter(Math.max(minScale, scale - 0.2));
         }
     });
 
-    function zoomTowardsCenter(newScale) {
-        const scaleRatio = newScale / scale;
-
-        const viewportCenterX = window.innerWidth / 2;
-        const viewportCenterY = window.innerHeight / 2;
-
-        currentPos.x -= (viewportCenterX - currentPos.x) * (scaleRatio - 1);
-        currentPos.y -= (viewportCenterY - currentPos.y) * (scaleRatio - 1);
-        scale = newScale;
-        updateMapInfo();
-        requestUpdateTransform();
+    function zoomTowardsCenter(ns) {
+        const r = ns / scale, cx = window.innerWidth / 2, cy = window.innerHeight / 2;
+        currentPos.x -= (cx - currentPos.x) * (r - 1);
+        currentPos.y -= (cy - currentPos.y) * (r - 1);
+        scale = ns; updateMapInfo(); requestUpdateTransform();
     }
+
     resetBtn.addEventListener('click', () => {
-        scale = 1;
-        currentPos = {
-            x: window.innerWidth / 2 - mapWidth / 2,
-            y: window.innerHeight / 2 - mapHeight / 2
-        };
-        updateMapInfo();
-        requestUpdateTransform();
+        if (is3DMode) {
+            threeCamera.position.set(0, 200, 300);
+            threeControls.target.set(0, 0, 0);
+            threeControls.update(); updateMapInfo3D();
+        } else {
+            scale = 1;
+            currentPos = { x: window.innerWidth / 2 - mapWidth / 2, y: window.innerHeight / 2 - mapHeight / 2 };
+            updateMapInfo(); requestUpdateTransform();
+        }
     });
 
     function updateMapInfo() {
-        const viewportCenterX = (window.innerWidth / 2 - currentPos.x) / scale;
-        const viewportCenterY = (window.innerHeight / 2 - currentPos.y) / scale;
-
-        const centerX = mapWidth / 2;
-        const centerY = mapHeight / 2;
-        const coordX = ((viewportCenterX - centerX) / scaleCoordinates).toFixed(1);
-        const coordY = (-((viewportCenterY - centerY) / scaleCoordinates)).toFixed(1);
-        mapInfo.textContent = `X: ${coordX} Y: ${coordY} Scale: ${scale.toFixed(1)}`;
+        const cx = (window.innerWidth / 2 - currentPos.x) / scale;
+        const cy = (window.innerHeight / 2 - currentPos.y) / scale;
+        mapInfo.textContent = `X: ${((cx - mapCenterX) / scaleCoordinates).toFixed(1)} Y: ${(-((cy - mapCenterY) / scaleCoordinates)).toFixed(1)} Scale: ${scale.toFixed(1)}`;
     }
 
     updateMapInfo();
 
     window.addEventListener('resize', () => {
-        currentPos = {
-            x: window.innerWidth / 2 - mapWidth / 2,
-            y: window.innerHeight / 2 - mapHeight / 2
-        };
-        updateMapInfo();
-        requestUpdateTransform();
+        if (is3DMode) {
+            threeCamera.aspect = window.innerWidth / window.innerHeight;
+            threeCamera.updateProjectionMatrix();
+            threeRenderer.setSize(window.innerWidth, window.innerHeight);
+            updateMapInfo3D();
+        } else {
+            currentPos = { x: window.innerWidth / 2 - mapWidth / 2, y: window.innerHeight / 2 - mapHeight / 2 };
+            updateMapInfo(); requestUpdateTransform();
+        }
         hideTooltip();
     });
 
-    // --- Search ---
+    // =========================================================
+    // Search
+    // =========================================================
+
     const searchInput = document.getElementById('search-input');
     const searchResults = document.getElementById('search-results');
     let slugSet = new Set();
@@ -509,207 +696,144 @@ document.addEventListener('DOMContentLoaded', async () => {
     let searchAbort = null;
     let selectedSearchIndex = -1;
 
-    // Build lookup after data loads
     function buildSearchIndex() {
         slugSet = new Set(allPoints.map(p => p.slug));
         slugToCoords = {};
-        for (const p of allPoints) {
-            slugToCoords[p.slug] = p;
-        }
+        for (const p of allPoints) slugToCoords[p.slug] = p;
     }
 
-    // Rebuild index after the data loads
     const _dataLoadedCheck = setInterval(() => {
-        if (allPoints.length > 0) {
-            buildSearchIndex();
-            clearInterval(_dataLoadedCheck);
-        }
+        if (allPoints.length > 0) { buildSearchIndex(); clearInterval(_dataLoadedCheck); }
     }, 200);
 
     searchInput.addEventListener('input', () => {
-        const query = searchInput.value.trim();
+        const q = searchInput.value.trim();
         clearTimeout(searchTimeout);
-        if (query.length < 2) {
-            searchResults.classList.remove('visible');
-            searchResults.innerHTML = '';
-            selectedSearchIndex = -1;
-            return;
-        }
-        searchTimeout = setTimeout(() => doSearch(query), 300);
+        if (q.length < 2) { searchResults.classList.remove('visible'); searchResults.innerHTML = ''; selectedSearchIndex = -1; return; }
+        searchTimeout = setTimeout(() => doSearch(q), 300);
     });
 
     searchInput.addEventListener('keydown', (e) => {
         const items = searchResults.querySelectorAll('.search-result-item');
         if (!items.length) return;
-
-        if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            selectedSearchIndex = Math.min(selectedSearchIndex + 1, items.length - 1);
-            updateSearchSelection(items);
-        } else if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            selectedSearchIndex = Math.max(selectedSearchIndex - 1, 0);
-            updateSearchSelection(items);
-        } else if (e.key === 'Enter') {
-            e.preventDefault();
-            if (selectedSearchIndex >= 0 && selectedSearchIndex < items.length) {
-                items[selectedSearchIndex].click();
-            }
-        } else if (e.key === 'Escape') {
-            searchInput.blur();
-            searchResults.classList.remove('visible');
-        }
+        if (e.key === 'ArrowDown') { e.preventDefault(); selectedSearchIndex = Math.min(selectedSearchIndex + 1, items.length - 1); updateSearchSelection(items); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); selectedSearchIndex = Math.max(selectedSearchIndex - 1, 0); updateSearchSelection(items); }
+        else if (e.key === 'Enter') { e.preventDefault(); if (selectedSearchIndex >= 0) items[selectedSearchIndex].click(); }
+        else if (e.key === 'Escape') { searchInput.blur(); searchResults.classList.remove('visible'); }
     });
 
     function updateSearchSelection(items) {
-        items.forEach((item, i) => {
-            item.classList.toggle('selected', i === selectedSearchIndex);
-        });
-        if (selectedSearchIndex >= 0 && items[selectedSearchIndex]) {
-            items[selectedSearchIndex].scrollIntoView({ block: 'nearest' });
-        }
+        items.forEach((item, i) => item.classList.toggle('selected', i === selectedSearchIndex));
+        if (selectedSearchIndex >= 0 && items[selectedSearchIndex]) items[selectedSearchIndex].scrollIntoView({ block: 'nearest' });
     }
 
     async function doSearch(query) {
         if (searchAbort) searchAbort.abort();
         searchAbort = new AbortController();
-
         searchResults.innerHTML = '';
         searchResults.classList.add('visible');
         selectedSearchIndex = -1;
-
-        const loadingDiv = document.createElement('div');
-        loadingDiv.className = 'search-empty';
-        loadingDiv.textContent = 'Searching...';
-        searchResults.appendChild(loadingDiv);
+        const ld = document.createElement('div');
+        ld.className = 'search-empty'; ld.textContent = 'Searching...';
+        searchResults.appendChild(ld);
 
         try {
             const url = `https://corsproxy.io/?url=${encodeURIComponent('https://api.hikka.io/anime?page=1&size=15')}`;
-            const response = await fetch(url, {
+            const r = await fetch(url, {
                 method: 'POST',
-                headers: {
-                    'accept': 'application/json',
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    query: query,
-                    sort: ['score:desc', 'scored_by:desc', 'native_score:desc', 'native_scored_by:desc']
-                }),
+                headers: { 'accept': 'application/json', 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query, sort: ['score:desc', 'scored_by:desc', 'native_score:desc', 'native_scored_by:desc'] }),
                 signal: searchAbort.signal
             });
-
-            if (!response.ok) throw new Error(`API ${response.status}`);
-            const data = await response.json();
-            renderSearchResults(data.list || [], query);
+            if (!r.ok) throw new Error(`API ${r.status}`);
+            renderSearchResults((await r.json()).list || [], query);
         } catch (err) {
             if (err.name === 'AbortError') return;
-            console.error('Search error:', err);
             searchResults.innerHTML = '<div class="search-empty">Search failed. Try again.</div>';
         }
     }
 
     function renderSearchResults(list, query) {
         searchResults.innerHTML = '';
+        const enriched = list.map(item => ({ ...item, onMap: slugSet.has(item.slug) }));
+        enriched.sort((a, b) => a.onMap !== b.onMap ? (a.onMap ? -1 : 1) : (b.score || 0) - (a.score || 0));
+        if (!enriched.length) { searchResults.innerHTML = '<div class="search-empty">No results found</div>'; return; }
 
-        // Sort: on-map first, then by score desc
-        const enriched = list.map(item => ({
-            ...item,
-            onMap: slugSet.has(item.slug)
-        }));
-        enriched.sort((a, b) => {
-            if (a.onMap !== b.onMap) return a.onMap ? -1 : 1;
-            return (b.score || 0) - (a.score || 0);
-        });
-
-        if (enriched.length === 0) {
-            searchResults.innerHTML = '<div class="search-empty">No results found</div>';
-            return;
-        }
-
-        const fragment = document.createDocumentFragment();
+        const frag = document.createDocumentFragment();
         for (const item of enriched) {
             const el = document.createElement('div');
             el.className = `search-result-item${item.onMap ? '' : ' not-on-map'}`;
             el.dataset.slug = item.slug;
             el.dataset.onMap = item.onMap ? '1' : '0';
-
-            const title = item.title_ua || item.title_en || item.title_ja || 'Unknown';
-            const subtitle = [item.title_en, item.title_ja].filter(t => t && t !== title).join(' / ');
-            const mediaType = formatMediaType(item.media_type);
-            const score = item.score ? `⭐ ${item.score}` : '';
-            const eps = item.episodes_total ? `${item.episodes_released}/${item.episodes_total} ep` : '';
-
+            const t = item.title_ua || item.title_en || item.title_ja || 'Unknown';
+            const sub = [item.title_en, item.title_ja].filter(x => x && x !== t).join(' / ');
             el.innerHTML = `
                 <img class="search-result-img" src="${item.image || ''}" alt="" onerror="this.style.display='none'">
                 <div class="search-result-info">
-                    <div class="search-result-title">${escapeHtml(title)}</div>
-                    <div class="search-result-meta">${[subtitle, mediaType, score, eps].filter(Boolean).join(' · ')}</div>
+                    <div class="search-result-title">${escapeHtml(t)}</div>
+                    <div class="search-result-meta">${[sub, formatMediaType(item.media_type), item.score, item.episodes_total ? `${item.episodes_released}/${item.episodes_total} ep` : ''].filter(Boolean).join(' ')}</div>
                 </div>
-                <span class="search-result-badge ${item.onMap ? 'on-map' : 'off-map'}">${item.onMap ? 'On map' : 'Off map'}</span>
-            `;
-
+                <span class="search-result-badge ${item.onMap ? 'on-map' : 'off-map'}">${item.onMap ? 'On map' : 'Off map'}</span>`;
             el.addEventListener('click', () => handleSearchResultClick(item));
-            fragment.appendChild(el);
+            frag.appendChild(el);
         }
-        searchResults.appendChild(fragment);
+        searchResults.appendChild(frag);
         searchResults.classList.add('visible');
     }
 
     function handleSearchResultClick(item) {
         if (item.onMap && slugToCoords[item.slug]) {
             const p = slugToCoords[item.slug];
-            const targetScale = 2;
-            const screenX = mapCenterX + p.x * scaleCoordinates;
-            const screenY = mapCenterY + p.y * scaleCoordinates;
-
-            scale = targetScale;
-            currentPos.x = window.innerWidth / 2 - screenX * scale;
-            currentPos.y = window.innerHeight / 2 - screenY * scale;
-
-            updateMapInfo();
-            requestUpdateTransform();
-
-            // Show tooltip for the found point
-            setTimeout(() => {
-                const el = visiblePoints.get(p.slug);
-                if (el) {
-                    if (selectedPointEl) {
-                        selectedPointEl.classList.remove('selected');
-                    }
+            if (is3DMode) {
+                const target = new THREE.Vector3((p.x3d || 0) * THREE_SCALE, (p.y3d || 0) * THREE_SCALE, (p.z3d || 0) * THREE_SCALE);
+                const camTarget = target.clone().add(new THREE.Vector3(0, 80, 100));
+                const sp = threeCamera.position.clone(), st = threeControls.target.clone();
+                const dur = 600, t0 = performance.now();
+                (function anim(now) {
+                    const t = Math.min((now - t0) / dur, 1);
+                    const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+                    threeCamera.position.lerpVectors(sp, camTarget, ease);
+                    threeControls.target.lerpVectors(st, target, ease);
+                    threeControls.update();
+                    if (t < 1) requestAnimationFrame(anim);
+                    else updateMapInfo3D();
+                })(performance.now());
+                setTimeout(() => {
+                    highlight3DPoint(p.slug);
                     selectedPointSlug = p.slug;
-                    selectedPointEl = el;
-                    selectedPointEl.classList.add('selected');
-                    const rect = el.getBoundingClientRect();
-                    fetchAnimeInfo(p.slug, rect.left + rect.width / 2, rect.top - 15);
-                }
-            }, 100);
+                    const scr = threeToScreen(target);
+                    fetchAnimeInfo(p.slug, scr.x, scr.y - 15);
+                }, 700);
+            } else {
+                scale = 2;
+                currentPos.x = window.innerWidth / 2 - (mapCenterX + p.x * scaleCoordinates) * scale;
+                currentPos.y = window.innerHeight / 2 - (mapCenterY + p.y * scaleCoordinates) * scale;
+                updateMapInfo(); requestUpdateTransform();
+                setTimeout(() => {
+                    const el = visiblePoints.get(p.slug);
+                    if (el) {
+                        if (selectedPointEl) selectedPointEl.classList.remove('selected');
+                        selectedPointSlug = p.slug; selectedPointEl = el; selectedPointEl.classList.add('selected');
+                        const r = el.getBoundingClientRect();
+                        fetchAnimeInfo(p.slug, r.left + r.width / 2, r.top - 15);
+                    }
+                }, 100);
+            }
         } else {
             window.open(`https://hikka.io/anime/${item.slug}`, '_blank');
         }
-
         searchResults.classList.remove('visible');
-        searchInput.value = '';
-        searchInput.blur();
+        searchInput.value = ''; searchInput.blur();
     }
 
-    function escapeHtml(str) {
-        const div = document.createElement('div');
-        div.textContent = str;
-        return div.innerHTML;
-    }
+    function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
-    // Close search on click outside
     document.addEventListener('click', (e) => {
-        if (!e.target.closest('.search-container')) {
-            searchResults.classList.remove('visible');
-        }
+        if (!e.target.closest('.search-container')) searchResults.classList.remove('visible');
     });
-
-    // Re-focus search on "/" key
     document.addEventListener('keydown', (e) => {
         if (e.key === '/' && document.activeElement !== searchInput && !e.target.closest('.search-container')) {
-            e.preventDefault();
-            searchInput.focus();
+            e.preventDefault(); searchInput.focus();
         }
     });
 });
