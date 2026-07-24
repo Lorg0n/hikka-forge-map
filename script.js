@@ -93,7 +93,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         threeScene.background = new THREE.Color(0x080808);
 
         threeCamera = new THREE.PerspectiveCamera(
-            60, window.innerWidth / window.innerHeight, 0.1, 10000
+            60, window.innerWidth / window.innerHeight, 0.1, 100000
         );
         threeCamera.position.set(0, 200, 300);
 
