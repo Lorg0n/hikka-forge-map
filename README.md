@@ -1,52 +1,48 @@
 # Hikka Anime Map
 
-This interactive map is built using embeddings of anime titles from the website **[Hikka.io](https://hikka.io)**. The goal of this map is to visually represent the similarity of anime titles based on the embeddings of their names.
+An interactive 2D map of anime from [Hikka.io](https://hikka.io). Every point is an anime slug from the Hikka database with a populated [Forge2Vec](https://github.com/Lorg0n/forge2vec) embedding.
 
-## Overview
+## How the map is built
 
-The map takes 384-dimensional vectors representing anime title embeddings and projects them onto a 2D plane. This allows you to explore how similar different anime titles are based on their embeddings. However, it's important to note that reducing 384 dimensions to 2D can often result in a loss of information, so the map is not perfectly accurate in terms of preserving the full similarity.
+The current map is a static snapshot generated from the database rows where `anime.embedding IS NOT NULL`:
 
-In the future has plans to enhance the map by incorporating **genre-based similarity** in addition to title similarity, offering a more comprehensive representation of how anime are related to each other.
+- 10,449 anime points
+- 256-dimensional Forge2Vec embeddings
+- 2D coordinates generated with deterministic PCA
+- point identifiers taken directly from the database `slug` column
 
-## Features
+Forge2Vec combines anime descriptions, titles, genres, and available metadata. The projection makes nearby points broadly more similar in the original embedding space, but it cannot preserve every relationship from 256 dimensions. Coordinates are therefore useful for exploration, not as exact similarity scores.
 
-- **Interactive Map**: Navigate through the map to explore anime titles and their relationships.
-- **Zoom and Reset Controls**: Zoom in/out and reset the map to its original state.
-- **Tooltip**: Hover over a point to see information about the anime, including its title.
-- **Grid and Axis**: The map includes grid lines and axes to provide a sense of spatial orientation.
+The generated points are stored in [`anime_map.json`](anime_map.json) as objects with this shape:
 
-## Limitations
+```json
+{
+  "x": 12.345678,
+  "y": -6.789012,
+  "slug": "anime-slug-from-hikka"
+}
+```
 
-As mentioned, this map uses a 2D projection of 384-dimensional vectors, meaning that some fine details about anime similarities might be lost during the dimensionality reduction process. Thus, the map should be considered an approximation rather than an exact science.
+## Using the map
 
-## Future Plans
+- Drag the map to move around.
+- Use `+` and `−` to zoom.
+- Press `⟳` to reset the view.
+- Click a point to load its anime details and open the Hikka page from the tooltip.
 
-We are working on integrating **genre-based similarity** into the map, which will provide an even more accurate representation of how anime titles are related not only by their names but also by their genres. Stay tuned for future updates!
+The map is available at [lorg0n.github.io/hikka-forge-map](https://lorg0n.github.io/hikka-forge-map/).
 
-## Preview
+## Project files
 
-Here's a preview of what the map looks like:
+- `index.html` — page structure and controls
+- `style.css` — map and tooltip styling
+- `script.js` — rendering, navigation, and Hikka API lookups
+- `anime_map.json` — generated coordinates and database slugs
 
-![Hikka Anime Title Map Preview](https://github.com/user-attachments/assets/d0f8baaf-8fe1-4660-ac36-a3af856c4c12)
+## Updating the snapshot
 
-## How to Use
-
-1. **Zoom In/Out**: Use the "+" and "-" buttons to zoom in and out of the map.
-2. **Reset**: Press the reset button (⟲) to return to the default view.
-3. **Click on Points**: Move your mouse over any point on the map to view information about the anime.
-
-## Access the Map
-
-You can explore the Hikka Anime Title Map by visiting the following link:
-
-[Explore the Map](https://lorg0n.github.io/hikka-forge-map/)
-
-## Technologies Used
-
-- **HTML/CSS**: For the basic structure and styling of the page.
-- **JavaScript**: For rendering the interactive map and handling user interactions.
-- **Embeddings**: Based on data from Hikka.io to visualize anime title similarities.
+Regenerate `anime_map.json` after new anime embeddings are populated in the database. The map frontend expects the existing `{x, y, slug}` schema, so keep the database slug paired with the same row’s embedding during projection.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License. See [LICENSE](LICENSE) if a license file is added to the repository.
