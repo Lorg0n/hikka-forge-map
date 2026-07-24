@@ -24,6 +24,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const minScale = 0.1;
     let activePointSlug = null;
     let selectedPointSlug = null;
+    let selectedPointEl = null;
     let tooltipVisible = false;
     let tooltipTimer = null;
     let animeCache = {};
@@ -162,6 +163,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             requestAnimationFrame(() => {
                 updateMapTransform();
                 updateVisiblePoints();
+                repositionTooltip();
                 transformPending = false;
             });
         }
@@ -222,16 +224,23 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     function renderTooltip(data, x, y) {
         tooltipContent.innerHTML = `
-            <a href="https://hikka.io/anime/${data.slug}" target="_blank" class="tooltip-title-link">
-                <img class="tooltip-img" src="${data.image}" alt="${data.title_en}" onerror="this.src='https://via.placeholder.com/300x150?text=No+Image'">
-                <h3 class="tooltip-title">${data.title_ua || data.title_en || data.title_ja}</h3>
+            <a href="https://hikka.io/anime/${data.slug}" target="_blank" class="tooltip-img-link">
+                <div class="tooltip-img-skeleton"></div>
+                <img class="tooltip-img" src="${data.image}" alt="${data.title_en}"
+                     onload="this.classList.add('loaded'); this.previousElementSibling.style.display='none'"
+                     onerror="this.src='https://via.placeholder.com/300x150?text=No+Image'">
             </a>
-            ${data.title_ja ? `<p class="tooltip-subtitle">${data.title_ja}</p>` : ''}
-            ${data.synopsis_ua ? `<div class="tooltip-desc">${data.synopsis_ua.slice(0, 150)}${data.synopsis_ua.length > 150 ? '...' : ''}</div>` : ''}
-            <div class="tooltip-info">
-                ${data.score ? `<span>⭐ ${data.score}</span>` : ''}
-                ${data.media_type ? `<span>${formatMediaType(data.media_type)}</span>` : ''}
-                ${data.episodes_total ? `<span>${data.episodes_released}/${data.episodes_total} eps.</span>` : ''}
+            <div class="tooltip-info-col">
+                <a href="https://hikka.io/anime/${data.slug}" target="_blank" class="tooltip-title-link">
+                    <h3 class="tooltip-title">${data.title_ua || data.title_en || data.title_ja}</h3>
+                </a>
+                ${data.title_ja ? `<p class="tooltip-subtitle">${data.title_ja}</p>` : ''}
+                ${data.synopsis_ua ? `<div class="tooltip-desc">${data.synopsis_ua.slice(0, 150)}${data.synopsis_ua.length > 150 ? '...' : ''}</div>` : ''}
+                <div class="tooltip-info">
+                    ${data.score ? `<span>⭐ ${data.score}</span>` : ''}
+                    ${data.media_type ? `<span>${formatMediaType(data.media_type)}</span>` : ''}
+                    ${data.episodes_total ? `<span>${data.episodes_released}/${data.episodes_total} eps.</span>` : ''}
+                </div>
             </div>
         `;
         tooltip.style.left = `${x}px`;
@@ -268,7 +277,45 @@ document.addEventListener('DOMContentLoaded', async () => {
     function hideTooltip() {
         tooltip.style.display = 'none';
         tooltipVisible = false;
+        if (selectedPointEl) {
+            selectedPointEl.classList.remove('selected');
+            selectedPointEl = null;
+        }
         selectedPointSlug = null;
+    }
+
+    function repositionTooltip() {
+        if (!tooltipVisible || !selectedPointEl) return;
+        const rect = selectedPointEl.getBoundingClientRect();
+        const x = rect.left + rect.width / 2;
+        const y = rect.top - 15;
+        tooltip.style.left = `${x}px`;
+        tooltip.style.top = `${y}px`;
+
+        const tooltipRect = tooltip.getBoundingClientRect();
+        const windowWidth = window.innerWidth;
+        const windowHeight = window.innerHeight;
+        let transformX = '-50%';
+        let transformY = '-100%';
+
+        if (tooltipRect.right > windowWidth) {
+            tooltip.style.left = `${windowWidth - tooltipRect.width - 10}px`;
+            transformX = '0';
+        } else if (tooltipRect.left < 0) {
+            tooltip.style.left = '10px';
+            transformX = '0';
+        }
+
+        const updatedRect = tooltip.getBoundingClientRect();
+        if (updatedRect.top < 0) {
+            tooltip.style.top = `${rect.bottom + 15}px`;
+            transformY = '0';
+        } else if (updatedRect.bottom > windowHeight) {
+            tooltip.style.top = `${rect.top - 15}px`;
+            transformY = '-100%';
+        }
+
+        tooltip.style.transform = `translate(${transformX}, ${transformY})`;
     }
 
     function formatMediaType(type) {
@@ -298,7 +345,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                 return;
             }
 
+            if (selectedPointEl) {
+                selectedPointEl.classList.remove('selected');
+            }
             selectedPointSlug = slug;
+            selectedPointEl = pointEl;
+            selectedPointEl.classList.add('selected');
             fetchAnimeInfo(slug, centerX, centerY);
             return;
         }
@@ -615,8 +667,13 @@ document.addEventListener('DOMContentLoaded', async () => {
             setTimeout(() => {
                 const el = visiblePoints.get(p.slug);
                 if (el) {
-                    const rect = el.getBoundingClientRect();
+                    if (selectedPointEl) {
+                        selectedPointEl.classList.remove('selected');
+                    }
                     selectedPointSlug = p.slug;
+                    selectedPointEl = el;
+                    selectedPointEl.classList.add('selected');
+                    const rect = el.getBoundingClientRect();
                     fetchAnimeInfo(p.slug, rect.left + rect.width / 2, rect.top - 15);
                 }
             }, 100);
